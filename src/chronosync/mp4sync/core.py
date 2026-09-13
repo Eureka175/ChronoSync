@@ -173,9 +173,11 @@ def measure_file(
     """Measure ALL audio streams of one file against the reference stream.
 
     Measurements are made in the CONTENT domain: extraction ignores muxer
-    edit lists (``-ignore_editlist 1``), so a stream whose head was trimmed
-    by a container edit list is still measured correctly. ``start_time`` is
-    reported per channel for transparency but is NOT added to the delay.
+    edit lists (``-ignore_editlist 1``). Streams of one recording must have
+    equal decoded lengths — a per-stream head/tail trim (measured on some
+    ffmpeg versions when remuxing multichannel PCM into MP4) biases every
+    relative delay by the trimmed amount, so it is DETECTED and reported
+    instead of being silently absorbed.
     """
     streams = probe_audio_streams(path)
     if reference_stream >= len(streams):
@@ -200,6 +202,22 @@ def measure_file(
                 results.append(
                     measure_stream(path, stream, ref_audio, limit_seconds)
                 )
+
+    # Container integrity check: unequal decoded lengths across streams of the
+    # same recording mean a per-stream trim/pad, which biases relative delays.
+    lengths = [int(round(r.duration_seconds * SR)) for r in results]
+    spread = max(lengths) - min(lengths)
+    if spread > 2:
+        detail = ", ".join(
+            f"ch{r.stream}={n}" for r, n in zip(results, lengths)
+        )
+        for r in results:
+            r.warnings.append(
+                f"container anomaly: decoded stream lengths differ by {spread} "
+                f"samples ({detail}); per-stream trims bias relative delays by "
+                "the trimmed amount — verify against the source before trusting "
+                "small offsets"
+            )
     return results
 
 
