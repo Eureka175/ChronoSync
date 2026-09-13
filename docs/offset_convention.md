@@ -1,56 +1,61 @@
-# Offset 符号约定（项目级 API 规范）
+# Offset sign convention (project-wide API specification)
 
-**ChronoSync 全项目唯一的 offset 定义：**
+**The single offset definition used throughout ChronoSync:**
 
 ```text
 d = t_target - t_reference
 ```
 
-**语义：**
+**Semantics:**
 
-* `d > 0`：同一事件在 `target` 中出现得**更晚**（target 滞后）。
-* `d < 0`：同一事件在 `target` 中出现得**更早**（target 提前）。
-* `d = 0`：两者对齐。
+* `d > 0`: the same event occurs **later** in `target` (target lags).
+* `d < 0`: the same event occurs **earlier** in `target` (target leads).
+* `d = 0`: the two are aligned.
 
-**单位：** 内部统一使用**规范采样率 48 kHz 下的样本数**（`samples`），
-需要物理时间时除以 48000 得到秒（`seconds`）。所有 API 同时给出
-`*_samples` 与 `*_seconds` 字段时，二者必须满足
-`seconds = samples / 48000`。
+**Units:** internally the unit is always **samples at the canonical 48 kHz
+sample rate** (`samples`); when physical time is needed, divide by 48000 to get
+seconds (`seconds`). Wherever an API exposes both `*_samples` and `*_seconds`
+fields, the two must satisfy
+`seconds = samples / 48000`.
 
-## 与 GCC-PHAT 数学定义的关系
+## Relationship to the GCC-PHAT mathematical definition
 
-本项目的 GCC 实现计算（详见 ADR-004 / docs/algorithms.md）：
+The GCC implementation in this project computes
+(see ADR-004 / docs/algorithms.md for details):
 
 ```text
 gcc[j] = IFFT( conj(FFT(reference)) · FFT(target) )[j] ≈ Σ_n ref[n] · tgt[n + j]
 ```
 
-若 `tgt[n] = ref[n - N]`（target 滞后 N 个样本），`gcc` 在 `j = +N` 处取峰值，
-因此 `delay_samples = +N`，与上述约定一致。
+If `tgt[n] = ref[n - N]` (target lags by N samples), `gcc` peaks at `j = +N`,
+so `delay_samples = +N`, consistent with the convention above.
 
-注意：`scipy.signal.correlate(a, v)` 的内部方向与本项目相反——
-其峰值出现在 `-d` 处（测试 `test_matches_plain_cross_correlation_on_broadband_signal`
-明确验证了这一点）。
+Note: the internal direction of `scipy.signal.correlate(a, v)` is opposite to
+this project's — its peak appears at `-d` (the test
+`test_matches_plain_cross_correlation_on_broadband_signal`
+explicitly verifies this).
 
-## 各层含义
+## Meaning per layer
 
-| 层 | 对象 | 字段 | 方向 |
+| Layer | Object | Field | Direction |
 | --- | --- | --- | --- |
-| 粗匹配 | `MatchResult` | `offset_samples` | `t_target - t_reference` |
-| 精对齐 | `GCCResult` | `delay_samples` | `t_target - t_reference` |
+| Coarse matching | `MatchResult` | `offset_samples` | `t_target - t_reference` |
+| Fine alignment | `GCCResult` | `delay_samples` | `t_target - t_reference` |
 | Drift | `DriftModel` | `d(t) = alpha_ppm·1e-6·t + beta_samples` | `t_target - t_reference` |
-| 图 | `AlignmentEdge` | `offset_samples` | `t_target - t_source` |
-| 全局 | `TrackAlignment` | `offset_samples` | 相对图参考轨（参考轨恒为 0） |
-| 时间映射 | `TimeMap` | `T_global = f(T_local)` | 本地 → 全局 |
+| Graph | `AlignmentEdge` | `offset_samples` | `t_target - t_source` |
+| Global | `TrackAlignment` | `offset_samples` | relative to the graph reference track (the reference track is always 0) |
+| Time mapping | `TimeMap` | `T_global = f(T_local)` | local → global |
 
-## 符号一致性的强制手段
+## Enforcement of sign consistency
 
-* 所有模型 docstring 均引用 ADR-003；
-* 所有 JSON / CSV / CLI 输出直接复用模型字段，不另行定义方向；
-* 测试显式断言方向（如 `test_sign_antisymmetry`：
-  `gcc(ref, tgt).delay ≈ -gcc(tgt, ref).delay`）；
-* 合成数据框架的 `delay_samples(x, n)` 语义为
-  `y[n+k] = x[k]`（n > 0 时内容更晚出现），与约定严格一致。
+* Every model docstring references ADR-003;
+* All JSON / CSV / CLI output reuses the model fields directly and defines no
+  direction of its own;
+* Tests assert the direction explicitly (e.g. `test_sign_antisymmetry`:
+  `gcc(ref, tgt).delay ≈ -gcc(tgt, ref).delay`);
+* The `delay_samples(x, n)` semantics of the synthetic data framework are
+  `y[n+k] = x[k]` (for n > 0 the content appears later), strictly consistent
+  with the convention.
 
-**任何新模块都不得自行定义 offset 方向；如发现定义冲突，以本文档为准并
-修复冲突模块。**
+**No new module may define its own offset direction; if a definition conflict is
+found, this document is authoritative and the conflicting module must be fixed.**

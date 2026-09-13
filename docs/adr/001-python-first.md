@@ -1,34 +1,38 @@
-# ADR-001：Python-first 技术路线
+# ADR-001: Python-first technical direction
 
-**状态：** Accepted（2025，Phase 1）
-**影响面：** 全项目语言与性能策略
+**Status:** Accepted (2025, Phase 1)
+**Impact:** Project-wide language and performance strategy
 
-## 决策
+## Decision
 
-第一阶段（及默认路线）只写 Python：
+Phase 1 (and the default direction) writes Python only:
 
 ```text
-Python 3.12+ + NumPy + SciPy + 成熟 native 音频库
+Python 3.12+ + NumPy + SciPy + mature native audio libraries
 ```
 
-* FFT：`scipy.fft`（rfft/irfft，`next_fast_len`）
-* 信号处理：`scipy.signal`（find_peaks / peak_prominences / lfilter）
-* 解码：`soundfile`（libsndfile：WAV/BWF/RF64/FLAC，分块读取）
-* 重采样：`soxr`（SoXR polyphase）；fallback `scipy.signal.resample_poly` + 警告
-* 缓存：SQLite + `.npy/.npz` 文件型数组
+* FFT: `scipy.fft` (rfft/irfft, `next_fast_len`)
+* Signal processing: `scipy.signal` (find_peaks / peak_prominences / lfilter)
+* Decoding: `soundfile` (libsndfile: WAV/BWF/RF64/FLAC, chunked reads)
+* Resampling: `soxr` (SoXR polyphase); fallback `scipy.signal.resample_poly` + warning
+* Cache: SQLite + `.npy/.npz` file-backed arrays
 
-## 动机
+## Rationale
 
-音频对齐系统的瓶颈在 DSP 内核（FFT/互相关），NumPy/SciPy 已把这些内核
-委托给成熟 C/Fortran 实现；纯 Python 胶水层的开销在 Phase 1 实测中不构成
-瓶颈（60 s 全长 GCC 4.5 s，其中 FFT 主导）。
+The bottleneck of an audio alignment system lies in the DSP kernels
+(FFT/cross-correlation), and NumPy/SciPy already delegates those kernels to
+mature C/Fortran implementations; the overhead of the pure-Python glue layer
+did not constitute a bottleneck in Phase 1 measurements (60 s full-length GCC
+4.5 s, dominated by FFT).
 
-## 后果
+## Consequences
 
-* **禁止**提前引入 Numba / pybind11 / C++；只有当 profiling 证明纯 Python
-  胶水层成为瓶颈时才考虑（优先 Numba，其次 C 扩展）。
-* 性能结论必须以 benchmark 为准（wall/CPU/峰值内存 + 精度），见
-  `benchmarks/benchmark_gcc.py`。
-* 已有 benchmark 数据点：10 s 全长 GCC 0.58 s / 223 MB；60 s 4.5 s / 867 MB
-  （本机，2025-07 初测）。单次全长 GCC 内存 ≈ 16 B/样本 × 多缓冲，
-  分钟级以上必须窗口化（Phase 4 drift 模式）。
+* Introducing Numba / pybind11 / C++ ahead of time is **forbidden**; it is
+  considered only once profiling proves the pure-Python glue layer has become
+  the bottleneck (Numba first, C extensions second).
+* Performance conclusions must be based on benchmarks (wall/CPU/peak memory +
+  accuracy), see `benchmarks/benchmark_gcc.py`.
+* Existing benchmark data points: 10 s full-length GCC 0.58 s / 223 MB; 60 s
+  4.5 s / 867 MB (this machine, first measured 2025-07). A single full-length
+  GCC costs ≈ 16 B/sample × multiple buffers in memory, so anything at the
+  minute scale or above must be windowed (Phase 4 drift mode).

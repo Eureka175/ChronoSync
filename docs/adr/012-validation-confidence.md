@@ -1,35 +1,44 @@
-# ADR-012：验证与可解释置信度
+# ADR-012: Validation and explainable confidence
 
-**状态：** Accepted（2025，Phase 7）
-**影响面：** validation/、fine/gcc_phat.py
+**Status:** Accepted (2025, Phase 7)
+**Impact:** validation/, fine/gcc_phat.py
 
-## 决策
+## Decision
 
-验证四件套 + 证据聚合：
+A validation quartet + evidence aggregation:
 
-1. **残差 GCC**：校正后再次 GCC，理论接近 0 样本；静音窗口跳过
-   （GCC 无法测量静音），GCC 失败跳过——绝不把 NaN 当证据；
-2. **coherence（MSC）**：Welch 平均周期图，80-8000 Hz 均值；
-3. **polarity**：`corr(x,y)` 与 `corr(x,-y)` 对比，反相仅在反相关系数
-   **明显更高**（margin 0.1）时判定——**MSC 低 ≠ 反相**（实测固化：
-   无关内容 MSC<0.05 但 polarity=0）；
-4. **置信度 = 加权证据**（coarse 0.25 / drift R² 0.20 / 残差 0.25 /
-   coherence 0.15 / polarity 0.15），缺失证据剔除并重归一化 + 警告。
+1. **Residual GCC**: run GCC again after correction, in theory close to
+   0 samples; silent windows are skipped (GCC cannot measure silence) and GCC
+   failures are skipped — a NaN is never treated as evidence;
+2. **coherence (MSC)**: Welch-averaged periodogram, mean over 80-8000 Hz;
+3. **polarity**: compare `corr(x,y)` against `corr(x,-y)`; inversion is
+   declared only when the inverted correlation coefficient is **clearly
+   higher** (margin 0.1) — **low MSC is NOT inversion** (measured and pinned:
+   unrelated content shows MSC<0.05 yet polarity=0);
+4. **confidence = evidence-weighted** (coarse 0.25 / drift R² 0.20 / residual
+   0.25 / coherence 0.15 / polarity 0.15); missing evidence is dropped and the
+   weights renormalized, with a warning.
 
-## 关键实现决策
+## Details
 
-* **GCC 反相感知**（Phase 7 前置，改在 fine/gcc_phat.py）：
-  反相对的相关峰为**负**——当负峰 |值| > 正峰×1.2 时翻转相关面分析，
-  返回 `polarity=-1` + 警告。没有它，反相对的 drift 估计整体失效
-  （粗匹配是幅度指纹所以能过，drift 全部窗口失败——实测）。
-* **验证在"校正后"信号上进行**：漂移未去除的原始对 coherence 天然
-  崩溃（120 ppm/30 s 时 >277 Hz 全去相关，实测 MSC≈0.026）——漂移抹平
-  不是失配证据。validate_pair 内部先用 correct_track（SoXR）渲染再
-  测量，证据语义正确。
+* **GCC polarity awareness** (a Phase 7 prerequisite, changed in
+  fine/gcc_phat.py): the correlation peak of an inverted pair is **negative** —
+  when |negative peak| > positive peak×1.2 the correlation-surface analysis is
+  flipped and `polarity=-1` plus a warning is returned. Without it, drift
+  estimation on inverted pairs fails wholesale (coarse matching is an amplitude
+  fingerprint so it passes, while every drift window fails — measured).
+* **Validation runs on the "corrected" signal**: on a raw pair with drift still
+  present, coherence collapses naturally (>277 Hz fully decorrelated at
+  120 ppm/30 s; measured MSC≈0.026) — drift smoothing is not evidence of
+  mismatch. validate_pair therefore renders through correct_track (SoXR)
+  first and measures afterwards, so the evidence semantics are correct.
 
-## 后果
+## Consequences
 
-* 证据字典随报告输出（JSON 可序列化），无魔法数字式 confidence；
-* 反相被 drift/验证两层发现：GCC 警告 → 验证报告 POLARITY INVERSION；
-* 修正渲染的 coherence/polarity 检查同时覆盖线性/分段映射（平段输出
-  静音，coherence 自然反映）。
+* the evidence dictionary is emitted with the report (JSON-serializable), with
+  no magic-number confidence;
+* inversion is caught by both the drift and the validation layers: a GCC
+  warning → a POLARITY INVERSION line in the validation report;
+* the coherence/polarity checks on the corrected rendering cover both linear
+  and piecewise maps (flat segments emit silence, which coherence reflects
+  naturally).

@@ -1,33 +1,42 @@
-# ADR-008：粗匹配级联
+# ADR-008: Coarse-matching cascade
 
-**状态：** Accepted（2025，Phase 3）
-**影响面：** coarse/、features/、cache/
+**Status:** Accepted (2025, Phase 3)
+**Impact:** coarse/, features/, cache/
 
-## 决策
+## Decision
 
-粗匹配采用短路级联：metadata（prior）→ fingerprint → envelope →
-transient → No Match；每阶段返回 `MatchResult`（matched/offset/confidence/
-method/overlap_estimate/evidence/warnings），任何阶段达到
-`accept_confidence` 即返回；全部失败时返回最佳证据且 matched=False。
+Coarse matching uses a short-circuit cascade: metadata (prior) → fingerprint →
+envelope → transient → No Match; every stage returns a `MatchResult`
+(matched/offset/confidence/method/overlap_estimate/evidence/warnings), and the
+cascade returns as soon as any stage reaches `accept_confidence`; when all stages
+fail it returns the best evidence with matched=False.
 
-## 关键实现决策
+## Key implementation decisions
 
-1. **指纹绝对 dB 标定**：输入单位 RMS 归一 + 谱幅度除以窗能量 →
-   完整能量帧 ≈ 0 dB。取代"分段最大值相对归一"——后者导致分块指纹与
-   单次计算不一致（各 chunk 阈值基准不同，实测丢失/多出边界锚点）。
-   绝对标定同时保证跨文件增益不变性。
-2. **分块 == 单次**：峰检测需要 ±5 帧真实上下文（`maximum_filter`
-   补零在段边界产生伪峰/丢峰，实测修复）；块间重叠 delta_max+2 帧
-   覆盖锚点伙伴区。测试固化 `np.array_equal`。
-3. **投票置信度**：0.7·投票占比分 + 0.3·峰比分，再乘
-   `min(1, votes/5)` 投票门限——3 票/10 哈希碰撞不是匹配。
-4. **envelope 方向**：`scipy.signal.correlate(ref, tgt)` 峰值 = −d
-   （与 GCC 交叉验证固化）。
-5. **metadata 永不 matched**：无时间码解析时 mtime prior 是搜索提示，
-   不是证据。
+1. **Absolute dB calibration for the fingerprint**: unit-RMS normalization of the
+   input + spectral magnitude divided by window energy → a full-energy frame
+   ≈ 0 dB. This replaces "relative normalization to the segment maximum" — the
+   latter made chunked fingerprints inconsistent with a single computation (each
+   chunk had a different threshold baseline; boundary anchors were empirically
+   lost/gained). Absolute calibration also guarantees gain invariance across
+   files.
+2. **Chunked == single-shot**: peak detection needs ±5 frames of real context
+   (`maximum_filter` zero padding produces spurious/lost peaks at segment
+   boundaries, fixed empirically); inter-chunk overlap of delta_max+2 frames
+   covers the anchor partner region. A test pins this down with
+   `np.array_equal`.
+3. **Vote confidence**: 0.7·vote share + 0.3·peak ratio, then multiplied by the
+   `min(1, votes/5)` vote gate — 3 votes/10 hash collisions is not a match.
+4. **envelope direction**: the peak of `scipy.signal.correlate(ref, tgt)` = −d
+   (cross-validated against GCC and pinned down).
+5. **metadata is never matched**: without timecode parsing the mtime prior is a
+   search hint, not evidence.
 
-## 后果
+## Consequences
 
-* 粗匹配精度 ±0.5 帧（~23 ms @ 11025 Hz）是设计内行为；drift 层精化；
-* 缓存键含 algo/feat 版本（ADR-006），指纹算法变更自动失效；
-* 专利提示（ADR-007）：星座思想为 clean-room 实现，商用另行评估。
+* A coarse-matching accuracy of ±0.5 frames (~23 ms @ 11025 Hz) is by-design
+  behaviour; the drift layer refines it;
+* cache keys include the algo/feat versions (ADR-006), so a fingerprint
+  algorithm change invalidates automatically;
+* patent note (ADR-007): the constellation idea is a clean-room implementation;
+  commercial use is evaluated separately.

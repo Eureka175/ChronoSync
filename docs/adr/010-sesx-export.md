@@ -1,39 +1,51 @@
-# ADR-010：Adobe Audition SESX 导出
+# ADR-010: Adobe Audition SESX export
 
-**状态：** Accepted（2025，Phase 3+，用户明确要求）
-**依据：** docs/research/notes/sesx_format.md、audition_import_paths.md
+**Status:** Accepted (2025, Phase 3+, explicit user requirement)
+**Basis:** docs/research/notes/sesx_format.md, audition_import_paths.md
 
-## 决策
+## Decision
 
-实现**手写 .sesx 导出**（export/sesx.py）。调研裁决（高置信）：
+Implement a **hand-written .sesx export** (export/sesx.py). Research verdict
+(high confidence):
 
-* SESX 是**无校验和/签名的纯 XML**；社区已有两个 MIT 生产级 writer
-  （`outhud/audition-ses-to-sesx-converter` 在 Audition 2025 做过
-  逐样本渲染验证；`nurdism/audition` 生产 bot 使用）；
-* **所有时间字段（startPoint/endPoint/sourceInPoint/sourceOutPoint/
-  duration）是会话采样率下的整数样本**（Adobe 官方脚本 API + 三个独立
-  代码库 + 真实文件算术四重确认），不是秒、不是 tick；
-* 最小结构：`sesx/session(tracks(音频轨+masterTrack)+sessionState)
-  + files 表`；component/fade/channelMap/xmp 等全部可省略；
-* 保留：`<!DOCTYPE sesx>`、masterTrack、trackOutput→master 路由、
-  `mediaHandler="AmioWav"`、`defaultPanModeLogarithmic`（保持居中轨
-  单位增益）。
+* SESX is **plain XML without checksum or signature**; the community already
+  has two production-grade MIT writers
+  (`outhud/audition-ses-to-sesx-converter`, verified sample-by-sample in
+  Audition 2025; `nurdism/audition`, used by a production bot);
+* **all time fields (startPoint/endPoint/sourceInPoint/sourceOutPoint/
+  duration) are integer sample counts at the session sample rate**
+  (confirmed four ways: the official Adobe scripting API, three independent
+  codebases and arithmetic on real files), not seconds and not ticks;
+* minimal structure: `sesx/session(tracks(audio tracks+masterTrack)+sessionState)
+  + files table`; component/fade/channelMap/xmp and the rest can all be
+  omitted;
+* retained: `<!DOCTYPE sesx>`, masterTrack, trackOutput→master routing,
+  `mediaHandler="AmioWav"`, `defaultPanModeLogarithmic` (keeps centred tracks
+  at unity gain).
 
-## 保真规则（诚实声明，写入模块 docstring 与测试）
+## Details
 
-* identity / constant-offset → 单个精确 clip（整数样本）；
-* 线性 drift → **阶梯近似** clip（可配置粒度，默认 10 s/块）：Audition
-  clip 不支持变速，连续漂移无法在 SESX 内精确表达；每块台阶误差 ≤
-  ppm·chunk_seconds 样本。精确校正必须走 `drift.correct_track` 渲染；
-* piecewise（断点）→ 每结点区间一个 clip；平段（drop 空隙/insert 重复）
-  成为时间线空隙——丢失内容不虚构；
-* 负全局起点自动裁剪（clip 从 0 开始，source in-point 前移）。
+### Fidelity rules (honest disclosure, written into the module docstring and tests)
 
-## 后果
+* identity / constant-offset → a single exact clip (integer samples);
+* linear drift → a **stair-step approximation** of the clip (configurable
+  granularity, default 10 s per block): an Audition clip cannot change
+  playback rate, so continuous drift cannot be expressed exactly inside SESX;
+  the per-block step error is ≤ ppm·chunk_seconds samples. Exact correction
+  must go through `drift.correct_track` rendering;
+* piecewise (breakpoints) → one clip per interval between knots; flat segments
+  (drop gaps / insert repeats) become timeline gaps — lost content is never
+  fabricated;
+* a negative global start point is trimmed automatically (the clip starts at 0
+  and the source in-point moves forward).
 
-* 导出核心仍是 offsets + TimeMap + segments（非破坏性时间线），音频
-  渲染为可选；
-* Audition 无法表达变速时间线/变 tempo 映射——未来 Reaper RPP（Phase 9）
-  承担更丰富的映射；CSV/JSON 报告始终作为兜底；
-* 无官方 schema：格式细节以调研报告 + 两个验证过的 MIT 实现为基准，
-  XML 结构由测试固化（元素、单位、ID 链接、转义）。
+## Consequences
+
+* The export core remains offsets + TimeMap + segments (non-destructive
+  timeline); audio rendering is optional;
+* Audition cannot express a variable-rate timeline or a variable-tempo
+  mapping — the future Reaper RPP work (Phase 9) carries the richer mappings;
+  CSV/JSON reports always remain the fallback;
+* there is no official schema: format details are benchmarked against the
+  research report plus two verified MIT implementations, and the XML structure
+  is pinned by tests (elements, units, ID links, escaping).

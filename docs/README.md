@@ -12,8 +12,10 @@
 | [algorithms.md](algorithms.md) | All algorithms: GCC-PHAT / peak policy / confidence / coarse cascade / drift estimation / SESX / overlap / graph solve / validation |
 | [offset_convention.md](offset_convention.md) | Project-wide offset sign and unit convention (ADR-003 in practice) |
 
-> Detailed documents and ADRs are currently written in Chinese; the English
-> translation is in progress.
+> **Language note**: the core documents (`architecture.md`, `algorithms.md`,
+> `offset_convention.md`) and all ADRs (001–012) are written in English. The
+> Phase-0 research notes, the real-world case study and the external handoff
+> package are currently in Chinese; English translations are planned.
 
 ## Architecture decision records (ADR)
 

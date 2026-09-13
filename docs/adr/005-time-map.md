@@ -1,44 +1,49 @@
-# ADR-005：TimeMap 时间映射抽象
+# ADR-005: TimeMap time-mapping abstraction
 
-**状态：** Accepted（2025，Phase 1，模型先行）
-**影响面：** models/timemap.py、drift/（Phase 4）、export/（Phase 9）、全部业务代码
+**Status:** Accepted (2025, Phase 1, models first)
+**Impact:** models/timemap.py, drift/ (Phase 4), export/ (Phase 9), all business code
 
-## 决策
+## Decision
 
-每条录音不是 offset，而是映射：
+Every recording is not an offset but a mapping:
 
 ```text
-T_global = f_i(T_i)      # 单位：秒（双侧）
+T_global = f_i(T_i)      # unit: seconds (both sides)
 ```
 
-* `identity`：T_global = T_local
-* `constant_offset`：T_global = T_local + offset_seconds
-* `linear`：T_global = scale·T_local + offset_seconds（scale = 1 + ppm·1e-6）
-* `piecewise_linear`：按 (t_local, t_global) 结点分段线性，端外线性外推
+* `identity`: T_global = T_local
+* `constant_offset`: T_global = T_local + offset_seconds
+* `linear`: T_global = scale·T_local + offset_seconds (scale = 1 + ppm·1e-6)
+* `piecewise_linear`: piecewise linear over (t_local, t_global) knots, with linear extrapolation beyond the end knots
 
-业务代码依赖 `TimeMap` 接口（to_global / to_local / to_dict / from_dict /
-is_identity），**不得**直接操作 offset / alpha / beta。
+Business code depends on the `TimeMap` interface (to_global / to_local / to_dict /
+from_dict / is_identity) and **must not** manipulate offset / alpha / beta directly.
 
-## 动机
+## Rationale
 
-固定 offset、clock drift、局部断点（CLOCK_DISCONTINUITY）、分段漂移是同一
-类事物的不同复杂度形态。把它们统一为 TimeMap 后，drift 估计、图求解、
-导出、校正渲染全部只面对一个抽象。
+Fixed offset, clock drift, local discontinuities (CLOCK_DISCONTINUITY) and
+segmented drift are different complexity forms of the same kind of thing. Once
+they are unified as a TimeMap, drift estimation, graph solving, export and
+correction rendering all face a single abstraction.
 
-## 细节
+## Details
 
-* 样本 ↔ 秒转换只在边界进行（`to_global_samples` / `to_local_samples`，
-  规范采样率 48 kHz）；
-* piecewise 结点必须 t_local 严格递增且 t_global 单调不减（保证可逆）；
-* 序列化 `to_dict`/`from_dict` 支撑 JSON 导出与缓存；
-* `DriftModel`（d(t) = alpha_ppm·1e-6·t + beta_samples）是测量层模型，
-  可无损转换为 `LinearTimeMap(scale=1+alpha_ppm·1e-6, offset=beta/sr)`；
-* 分段漂移/断点不强行塞进线性模型——模型种类（linear vs piecewise）由
-  Phase 4 估计器根据残差结构决定。
+* Sample ↔ second conversion happens only at the boundary (`to_global_samples` /
+  `to_local_samples`, canonical sample rate 48 kHz);
+* piecewise knots must have strictly increasing t_local and monotonically
+  non-decreasing t_global (which guarantees invertibility);
+* serialization through `to_dict`/`from_dict` supports JSON export and caching;
+* `DriftModel` (d(t) = alpha_ppm·1e-6·t + beta_samples) is the measurement-layer
+  model and converts losslessly into
+  `LinearTimeMap(scale=1+alpha_ppm·1e-6, offset=beta/sr)`;
+* segmented drift/discontinuities are not forced into the linear model — the
+  model kind (linear vs piecewise) is decided by the Phase 4 estimator from the
+  residual structure.
 
-## 后果
+## Consequences
 
-* 未来新增映射类型（如样条）只需实现接口 + 扩展 from_dict 分派；
-* DAW 导出输出的是 TimeMap/segments 的非破坏性时间线（Phase 9）；
-* 渲染校正（可选功能）以 TimeMap 驱动高质量异步重采样，默认不用
-  phase vocoder。
+* New mapping types in the future (e.g. splines) only need to implement the
+  interface + extend the from_dict dispatch;
+* DAW export emits the non-destructive timeline of TimeMap/segments (Phase 9);
+* correction rendering (an optional feature) is TimeMap-driven and performs
+  high-quality asynchronous resampling; no phase vocoder by default.

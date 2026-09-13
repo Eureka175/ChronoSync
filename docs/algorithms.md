@@ -1,210 +1,207 @@
-# 算法说明（Phase 1：GCC-PHAT）
+# Algorithms (Phase 1: GCC-PHAT)
 
-## 1. GCC-PHAT 数学定义
+## 1. GCC-PHAT mathematical definition
 
-输入两路单声道信号（内部 float64，可选去均值 + RMS 归一化）：
+Input: two mono signals (internally float64, optional mean removal + RMS normalization):
 
 ```text
-nfft = next_fast_len(len(ref) + len(tgt) - 1)     # 零填充 → 线性相关，非循环
-R = rfft(ref, nfft)                               # 实 FFT，内存减半
+nfft = next_fast_len(len(ref) + len(tgt) - 1)     # zero padding → linear correlation, not circular
+R = rfft(ref, nfft)                               # real FFT, halved memory
 T = rfft(tgt, nfft)
-G[k] = conj(R[k]) · T[k] / ( |R[k]|·|T[k]| + ε )  # PHAT 白化
+G[k] = conj(R[k]) · T[k] / ( |R[k]|·|T[k]| + ε )  # PHAT whitening
 gcc[j] = irfft(G, nfft)  ≈  Σ_n ref[n] · tgt[n + j]    (j ≤ nfft/2)
 ```
 
-* 负 lag 环绕：`lag = j - nfft`（j > nfft/2）。
-* 有效 lag 区间：`[-(len(tgt)-1), len(ref)-1]`；搜索区间自动裁剪到该区间。
-* 方向（ADR-003）：`tgt[n] = ref[n-N]` ⇒ `gcc` 峰值在 `+N`。
+* Negative lag wrapping: `lag = j - nfft` (j > nfft/2).
+* Valid lag range: `[-(len(tgt)-1), len(ref)-1]`; the search interval is automatically clipped to that range.
+* Direction (ADR-003): `tgt[n] = ref[n-N]` ⇒ the `gcc` peak sits at `+N`.
 
-### 正则化 PHAT
+### Regularized PHAT
 
 ```text
-ε = ε_rel · max|G| + ε_abs       ε_rel = 1e-3, ε_abs = 1e-12（默认，均可配置）
+ε = ε_rel · max|G| + ε_abs       ε_rel = 1e-3, ε_abs = 1e-12 (defaults, both configurable)
 ```
 
-纯绝对下限（ε_rel = 0）会把窄带信号的频谱泄漏/近零频点全部白化到单位
-幅度，导致纯正弦这类信号的 GCC 完全被泄漏主导（实测峰高 0.34 且位置错误）。
-相对下限只白化"信息量足够"的频点，其余频点保留自然幅度：
-宽带信号峰高仅损失约 1%（实测 0.90 vs 理论 1.0），纯正弦则退化为其
-普通互相关（位置模周期正确、峰高极小、置信度低——正确行为，见 §4）。
+A purely absolute floor (ε_rel = 0) whitens the spectral leakage / near-zero-frequency bins of a narrowband signal all the way to unit magnitude, so the GCC of signals such as a pure sine is entirely dominated by leakage (measured peak height 0.34 and wrong location).
+The relative floor only whitens bins that carry "enough information" and leaves the remaining bins at their natural magnitude:
+a wideband signal loses only about 1% of peak height (measured 0.90 vs theoretical 1.0), while a pure sine degenerates to its ordinary cross-correlation (location correct modulo the period, very small peak height, low confidence — the correct behaviour, see §4).
 
-## 2. 峰值策略（fine/peak.py）
+## 2. Peak policy (fine/peak.py)
 
-禁止"全局最大 = 答案"。流程：
+"Global maximum = answer" is forbidden. The flow:
 
-1. `scipy.signal.find_peaks` 发现候选（distance=2），窗口两侧补 `-inf`
-   **再发现**——scipy 不会报告数组边缘的峰（实测坑，已修）；候选须严格
-   大于两侧邻点（消除补边平台伪峰），prominence 在原始窗口上计算。
-2. 候选按高度降序；primary/secondary 由 `PeakSelectionConfig` 选择：
-   * `exclusion_samples = 8`：second peak 必须距 primary ≥ 8 样本；
-   * 可选 **prior**：高度在 `(1 - prior_tolerance)` 之内的候选按与
-     prior 的距离重排（用于周期信号等歧义场景；prior 不伪造证据，
-     置信度仍如实反映测量质量）。
-3. 亚样本：抛物线插值（§3）。
+1. `scipy.signal.find_peaks` discovers candidates (distance=2); pad the window with `-inf`
+   on both sides **before discovery** — scipy does not report peaks at the array edge
+   (measured pitfall, fixed); a candidate must be strictly greater than both neighbours
+   (eliminating padding-plateau spurious peaks), and prominence is computed on the original window.
+2. Candidates are sorted by height descending; primary/secondary are selected by `PeakSelectionConfig`:
+   * `exclusion_samples = 8`: the second peak must be ≥ 8 samples away from the primary;
+   * optional **prior**: candidates whose height is within `(1 - prior_tolerance)` are
+     re-ranked by distance to the prior (used in ambiguous cases such as periodic signals;
+     the prior does not fabricate evidence, and confidence still reports measurement quality faithfully).
+3. Sub-sample: parabolic interpolation (§3).
 
-## 3. 亚样本估计（fine/subsample.py）
+## 3. Sub-sample estimation (fine/subsample.py)
 
 ```text
-delta = 0.5·(y[-1] - y[+1]) / (y[-1] - 2·y[0] + y[+1])   ，裁剪到 [-0.5, +0.5]
+delta = 0.5·(y[-1] - y[+1]) / (y[-1] - 2·y[0] + y[+1])   , clipped to [-0.5, +0.5]
 peak  = y[0] - 0.25·(y[-1] - y[+1])·delta
 ```
 
-**定位声明**：抛物线插值是数值估计，不等于物理世界绝对时间精度。
-基准（10 s/60 s 纯延迟、干净白噪声）实测误差 < 0.001 样本，该数字只对
-该具体条件成立；带噪/混响条件下的误差需以 benchmark 为准，文档不承诺
-"0.1 sample absolute accuracy"。
+**Scope statement**: parabolic interpolation is a numerical estimate, not a claim of absolute physical accuracy.
+The benchmark (10 s/60 s pure delay, clean white noise) measured an error < 0.001 samples; that figure holds only for those specific conditions. Under noisy/reverberant conditions the error must be taken from the benchmark — the documentation does not promise "0.1 sample absolute accuracy".
 
-## 4. Confidence（可解释证据）
+## 4. Confidence (interpretable evidence)
 
-`confidence = 0.3·height + 0.5·ratio + 0.2·prominence`，各项 ∈ [0,1]：
+`confidence = 0.3·height + 0.5·ratio + 0.2·prominence`, each term ∈ [0,1]:
 
-| 证据 | 定义 | 含义 |
+| Evidence | Definition | Meaning |
 | --- | --- | --- |
-| height | `log10(v/nf) / log10(1/nf)`，`nf = √(2·ln nfft)/√nfft`（单位幅度随机相位谱的期望峰值） | 峰相对噪声底有多高 |
-| ratio | `(r-1)/(r-1+0.5)`，`r = v/second_peak` | 峰是否唯一（歧义性） |
-| prominence | `prominence / v` | 峰是否尖锐 |
+| height | `log10(v/nf) / log10(1/nf)`, `nf = √(2·ln nfft)/√nfft` (expected peak of a unit-magnitude random-phase spectrum) | how far the peak stands above the noise floor |
+| ratio | `(r-1)/(r-1+0.5)`, `r = v/second_peak` | whether the peak is unique (ambiguity) |
+| prominence | `prominence / v` | whether the peak is sharp |
 
-ratio 权重最大：周期信号 / 回声链造成的**峰歧义是时延估计最危险的失败
-模式**。`success = v ≥ 2·nf`。
+ratio carries the largest weight: **peak ambiguity caused by periodic signals / echo chains is the most dangerous failure mode in delay estimation**. `success = v ≥ 2·nf`.
 
-已知且被测试固化的行为：
+Known behaviours, pinned down by tests:
 
-* 干净宽带信号：conf ≈ 0.95+，success ✓；
-* SNR 0 dB：conf ≈ 0.6，位置仍准；
-* 周期信号（稀疏梳状谱）：PHAT 每个频点等权投票 ⇒ 峰高天然极小
-  （≈ 占用频点数/nfft），`success=False` + conf < 0.6 + "ambiguous" 警告，
-  但位置仍模周期正确；给定 prior 后位置精确（≈ 真值），置信度不变高。
-  —— 这是**正确的诚实行为**：GCC 解决不了歧义时不得假装成功，粗匹配
-  / 瞬态层会接力。
+* Clean wideband signal: conf ≈ 0.95+, success ✓;
+* SNR 0 dB: conf ≈ 0.6, location still accurate;
+* Periodic signal (sparse comb spectrum): PHAT gives every bin an equal-weight vote ⇒ the
+  peak height is naturally tiny (≈ occupied bins/nfft), `success=False` + conf < 0.6 +
+  an "ambiguous" warning, but the location is still correct modulo the period; given a
+  prior the location becomes exact (≈ ground truth) while confidence does not rise.
+  — This is **correct, honest behaviour**: when GCC cannot resolve the ambiguity it must not
+  pretend to succeed; the coarse matching / transient layer takes over.
 
-## 5. Drift 的窗口化测量（Phase 4 预告，已被测试固化）
+## 5. Windowed measurement of drift (Phase 4 preview, pinned down by tests)
 
-白噪声 + 200 ppm 漂移时，单次全长 GCC 对漂移**失明**（漂移使频谱
-`R[k]` 与 `T[k] = R[k(1+p)]` 去相关，峰高 ≈ 0.007，位置随机）。
-这正是 drift 层必须用短窗的原因：窗内漂移 < 2 样本时
-`d(n) = ppm·1e-6·n` 可测（测试 `test_drift_ppm_gcc_sees_local_offset_in_short_windows`
-实测 8192 样本窗内误差 < 1 样本）。30-60 s 窗 + 50% overlap → 局部
-offset(t) → 拟合 → TimeMap 的完整流程在 Phase 4 实现。
+With white noise + 200 ppm drift, a single full-length GCC is **blind** to the drift (drift decorrelates the spectra
+`R[k]` and `T[k] = R[k(1+p)]`, peak height ≈ 0.007, location random).
+This is exactly why the drift layer must use short windows: while the within-window drift is < 2 samples,
+`d(n) = ppm·1e-6·n` is measurable (the test `test_drift_ppm_gcc_sees_local_offset_in_short_windows`
+measured an error < 1 sample in an 8192-sample window). The full flow of 30-60 s windows + 50% overlap → local
+offset(t) → fit → TimeMap is implemented in Phase 4.
 
-## 6. 合成框架的关键语义
+## 6. Key semantics of the synthetic framework
 
-* `delay_samples(x, n)`：`y[n+k] = x[k]`，越界内容丢弃、对侧补零
-  （"录音开始得更晚"的物理语义）；
-* `fractional_delay`：窗 sinc FIR（taps 必须为**奇数**——偶数长度核
-  `np.convolve(mode="same")` 会引入 taps/2 样本的偏移，实测坑，已修）
-  + 整数移位；边界区近似，仅内部精确；
-* `drift_ppm(x, ppm)`：按 `(1+ppm·1e-6)` 高质量重采样（soxr）；
-  ppm > 0 ⇒ target 时钟更快 ⇒ `d(n) = ppm·1e-6·n`；
-* `piecewise_drift`：各段保持**自然漂移长度**（物理正确），接缝 5 ms 交叉淡化；
-* 一切随机均带 seed，全部可复现。
+* `delay_samples(x, n)`: `y[n+k] = x[k]`, out-of-range content discarded, the other side
+  zero-padded (the physical semantics of "the recording started later");
+* `fractional_delay`: windowed sinc FIR (taps must be **odd** — an even-length kernel with
+  `np.convolve(mode="same")` introduces a taps/2-sample shift, a measured pitfall, fixed)
+  + integer shift; approximate at the boundaries, exact only in the interior;
+* `drift_ppm(x, ppm)`: high-quality resampling by `(1+ppm·1e-6)` (soxr);
+  ppm > 0 ⇒ the target clock is faster ⇒ `d(n) = ppm·1e-6·n`;
+* `piecewise_drift`: each segment keeps its **natural drift length** (physically correct), with 5 ms cross-fades at the seams;
+* every random draw is seeded, everything is reproducible.
 
 ---
 
-## 7. 粗匹配级联（Phase 3，coarse/）
+## 7. Coarse cascade (Phase 3, coarse/)
 
-级联顺序与短路策略（每个阶段都返回 `MatchResult`，绝不返回裸 float）：
+Cascade order and short-circuit policy (every stage returns a `MatchResult`, never a bare float):
 
 ```text
-metadata（只提供 prior，从不声称 matched）
-    → fingerprint（星座地标哈希 + 偏移投票直方图）
-    → envelope（抽取 RMS 包络 → 100 Hz 抽取 → 归一化互相关）
-    → transient（谱通量瞬态事件的偏移投票直方图）
+metadata (only supplies a prior, never claims matched)
+    → fingerprint (constellation landmark hashing + offset voting histogram)
+    → envelope (decimated RMS envelope → 100 Hz decimation → normalized cross-correlation)
+    → transient (offset voting histogram of spectral-flux transient events)
     → No Match
 ```
 
-* **metadata**：文件 mtime 差作为搜索 prior；时长/采样率作为证据；
-  永不 matched=True（BWF 时间码解析留待以后）。
-* **fingerprint**（features/fingerprint.py）：STFT（11025 Hz 工作率，
-  fft 1024/hop 512）→ **绝对 dB 标定**的对数幅度谱（输入单位 RMS 归一，
-  除以窗能量，完整能量帧 ≈ 0 dB——跨 chunk、跨文件可比，增益不变）→
-  2-D 局部极大（21×11 邻域，-45 dB 阈值）→ 目标区配对
-  (f1, f2, Δt) 哈希 → 偏移投票直方图 + 抛物线亚帧精修。
-  * 分块处理与单次计算**逐哈希一致**（块边界 ±5 帧上下文，实测修复）。
-  * 置信度 = 0.7·投票占比分 + 0.3·峰比，再乘 min(1, votes/5) 投票门限。
-  * 精度：±0.5 帧（@11025 Hz ≈ ±23 ms），是"粗"定位；drift 层负责精化。
-* **envelope**：包络抽取到 ~100 Hz（包络已是平滑能量信号，块均值抽取
-  不是音频重采样，不违反 ADR-002）→ scipy 归一化互相关
-  （**注意方向：scipy correlate 峰值 = −d**，实测固化）→ 抛物线亚样本。
-* **transient**：谱通量（STFT 分块，hop 对齐保证分块==单次）→ 峰值
-  → 10 ms bin 加权投票直方图。
-* 级联契约：任一阶段 `matched 且 confidence ≥ accept_confidence` 即返回；
-  全部失败时返回最佳证据 + matched=False（低于接受阈值绝不伪装成功）。
+* **metadata**: file mtime difference as the search prior; duration/sample rate as evidence;
+  never matched=True (BWF timecode parsing is left for later).
+* **fingerprint** (features/fingerprint.py): STFT (11025 Hz working rate,
+  fft 1024/hop 512) → **absolutely dB-calibrated** log-magnitude spectrum (input normalized to unit RMS,
+  divided by window energy, a full-energy frame ≈ 0 dB — comparable across chunks and across files, gain-invariant) →
+  2-D local maxima (21×11 neighbourhood, -45 dB threshold) → pairing within the target region
+  (f1, f2, Δt) hashing → offset voting histogram + parabolic sub-frame refinement.
+  * Chunked processing is **hash-for-hash identical** to a single-pass computation (±5 frames of context at block boundaries, measured fix).
+  * Confidence = 0.7·vote-share score + 0.3·peak ratio, then multiplied by the min(1, votes/5) vote gate.
+  * Accuracy: ±0.5 frame (@11025 Hz ≈ ±23 ms) — this is "coarse" localization; the drift layer refines it.
+* **envelope**: envelope extracted to ~100 Hz (the envelope is already a smooth energy signal; block-mean
+  decimation is not audio resampling and does not violate ADR-002) → scipy normalized
+  cross-correlation (**note the direction: the scipy correlate peak = −d**, pinned down by measurement) → parabolic sub-sample.
+* **transient**: spectral flux (chunked STFT, hop-aligned so that chunked == single-pass) → peaks
+  → 10 ms bin weighted voting histogram.
+* Cascade contract: return as soon as any stage is `matched` with `confidence ≥ accept_confidence`;
+  on total failure return the best evidence + matched=False (never disguise success below the acceptance threshold).
 
-## 8. Drift 估计（Phase 4，drift/）
+## 8. Drift estimation (Phase 4, drift/)
 
 ```text
-窗口调度（参考时间线，30-60 s 默认，50% overlap，自适应收缩）
-    → 每窗 GCC（target 窗按粗 offset 放置 → 测残差；prior 解歧义）
-    → OffsetMeasurement 序列（记录完整 d(t)）
-    → 鲁棒加权回归（MAD 离群剔除 = "bad measurement"）
-    → 变点检测（两段拟合的加权 SSE 改进 ≥25% 且 台阶≥100 样本 或 斜率变化≥4 ppm）
-    → 分类：clock_drift / constant_offset / piecewise_drift /
+window schedule (reference timeline, 30-60 s default, 50% overlap, adaptive shrinking)
+    → GCC per window (target window placed by the coarse offset → measure the residual; prior resolves ambiguity)
+    → OffsetMeasurement sequence (records the full d(t))
+    → robust weighted regression (MAD outlier rejection = "bad measurement")
+    → changepoint detection (weighted SSE improvement of a two-segment fit ≥25% and step ≥100 samples or slope change ≥4 ppm)
+    → classification: clock_drift / constant_offset / piecewise_drift /
              discontinuity / no_overlap
-    → TimeMap（linear / constant / piecewise，断点处平段建模）
+    → TimeMap (linear / constant / piecewise, flat segments modelled at the breakpoints)
 ```
 
-**关键物理约束（实测固化）**：PHAT 白化给每个频点等权投票；窗口内漂移
-超过约 1 个相干长度时，噪声类信号的频谱 `R[k]` 与 `T[k]=R[k(1+p)]` 去
-相关，长窗 GCC 峰被抹平（60 s 白噪声 @150 ppm 单窗完全失明）。因此：
-* 白噪声类内容需要 `T < 1/(ppm·f_max)` 的短窗（实测 8192 样本 @150 ppm
-  → α 误差 < 1 ppm）；
-* 估计器**自适应收缩**窗口（默认 30 s → 半衰 → 下限 0.5 s）直到足够的
-  窗口通过置信度门槛；
-* 30 s 窗 + 语音类内容（120 ppm）实测 α 误差 < 5 ppm、R² > 0.98。
+**Key physical constraint (pinned down by measurement)**: PHAT whitening gives every frequency bin an equal-weight
+vote; when the within-window drift exceeds about one coherence length, the spectra of noise-like signals
+`R[k]` and `T[k]=R[k(1+p)]` decorrelate and the long-window GCC peak is washed out (a 60 s white-noise window @150 ppm is completely blind). Therefore:
 
-**漂移 vs 断点 vs 坏测量 vs 无重叠**：偏移随时间变化不自动等于 clock
-drift——变点检测区分台阶（CLOCK_DISCONTINUITY，实测跳变量精确到样本）与
-斜率变化（piecewise_drift，实测 250/-100 ppm 两段 α 精确到 <1 ppm）；
-MAD 离群剔除单独报告坏窗口；窗口数不足 → no_overlap。
+* white-noise-like content needs short windows with `T < 1/(ppm·f_max)` (measured: 8192 samples @150 ppm
+  → α error < 1 ppm);
+* the estimator **shrinks the window adaptively** (default 30 s → halved → lower bound 0.5 s) until enough
+  windows pass the confidence gate;
+* 30 s windows + speech-like content (120 ppm) measured α error < 5 ppm, R² > 0.98.
 
-**校正（可选渲染）**：`correct_track` 用 SoXR 异步重采样把轨道渲染到
-全局时间线（不是 phase vocoder，不是音乐性 time-stretch）；断点平段输出
-静音；全局 0 之前的内容丢弃并警告。实测：150 ppm 白噪声对校正后残差
-GCC < 2 样本。
+**Drift vs breakpoint vs bad measurement vs no overlap**: an offset that varies over time does not automatically
+equal clock drift — changepoint detection distinguishes steps (CLOCK_DISCONTINUITY, measured jump size accurate to
+the sample) from slope changes (piecewise_drift, measured 250/-100 ppm two-segment α accurate to <1 ppm);
+MAD outlier rejection reports bad windows separately; too few windows → no_overlap.
 
-## 9. Adobe Audition SESX 导出（Phase 3+，export/sesx.py）
+**Correction (optional rendering)**: `correct_track` uses SoXR asynchronous resampling to render the track onto the
+global timeline (not a phase vocoder, not musical time-stretching); breakpoint flat segments output
+silence; content before global 0 is discarded with a warning. Measured: for 150 ppm white noise the residual
+GCC after correction is < 2 samples.
 
-调研结论（docs/research/notes/sesx_format.md，社区逆向 + 双 MIT 生产级
-writer 验证）：SESX 是**无校验和的纯 XML**；**所有时间字段为会话采样率
-下的整数样本**；clip 通过 `<files>` 表引用外部 WAV（非破坏性）。
+## 9. Adobe Audition SESX export (Phase 3+, export/sesx.py)
 
-保真规则（诚实声明）：
+Research conclusions (docs/research/notes/sesx_format.md, community reverse engineering + validation against two
+MIT production-grade writers): SESX is **checksum-free plain XML**; **all time fields are integer samples at the
+session sample rate**; clips reference external WAVs through the `<files>` table (non-destructive).
 
-* identity/constant-offset TimeMap → 单个精确 clip（整数样本）；
-* 线性 drift → 可配置粒度的阶梯近似 clip（Audition clip **不能变速**；
-  每 chunk 的台阶误差 ≤ ppm·chunk_seconds 个样本；精确校正走
-  correct_track 渲染）；
-* 分段映射（断点）→ 每结点区间一个 clip，平段成为时间线空隙
-  （丢失内容不虚构）；
-* 负全局起点自动裁剪（clip 从 0 开始，source in-point 前移）。
+Fidelity rules (honest statement):
 
-## 10. Overlap / Segment 检测（Phase 5，overlap/）
+* identity/constant-offset TimeMap → a single exact clip (integer samples);
+* linear drift → stair-step approximation clips at a configurable granularity (Audition clips **cannot change
+  speed**; the step error per chunk is ≤ ppm·chunk_seconds samples; exact correction goes through
+  correct_track rendering);
+* piecewise maps (breakpoints) → one clip per node interval, with flat segments becoming timeline gaps
+  (missing content is not fabricated);
+* negative global start points are trimmed automatically (the clip starts at 0, the source in-point moves forward).
 
-轨道内容 = 其 TimeMap 在本地时间轴上的**像集**。关键区分：同一时间线
-≠ 同样时长——有录音间隙的轨道建模为 **span 列表**
-（每段 = 本地区间 + 仿射映射；间隙无法用单一单调 local→global 函数
-表达而不虚构内容）。两轨像集求交 → 重叠 Segment。
+## 10. Overlap / segment detection (Phase 5, overlap/)
 
-* 官方示例（Track A 0-60 min；Track B 录 0-10/20-40/50-60）→ 3 个
-  Segment，每段携带双方本地区间（测试固化）；
-* 平段（drop）被排除在录制 span 之外；drop 造成的本地空洞不产生全局
-  空洞（内容覆盖连续，实测纠正过直觉错误）。
+A track's content = the **image set** of its TimeMap on the local timeline. Key distinction: the same timeline
+≠ the same duration — a track with recording gaps is modelled as a **list of spans**
+(each span = a local interval + an affine map; a gap cannot be expressed by a single monotonic local→global
+function without fabricating content). Intersecting the image sets of two tracks → overlap segments.
 
-## 11. 多轨全局求解（Phase 6，global_alignment/，ADR-011）
+* Official example (Track A 0-60 min; Track B records 0-10/20-40/50-60) → 3
+  segments, each carrying both sides' local intervals (pinned down by tests);
+* flat segments (drops) are excluded from the recorded spans; a local hole caused by a drop does not produce a global
+  hole (content coverage stays continuous — a measured correction of an intuitive mistake).
 
-`min Σ w_ij (t_i - t_j - d_ij)²`，参考轨=0；正规方程按连通分量求解；
-残差、离群边（>3×robust sigma）、每轨置信度；可选 IRLS（Huber 重加权，
-实测离群边污染下显著优于普通 WLS）。50 轨/1225 边求解 ~12 ms。
+## 11. Multi-track global solve (Phase 6, global_alignment/, ADR-011)
 
-## 12. 验证与置信度（Phase 7，validation/，ADR-012）
+`min Σ w_ij (t_i - t_j - d_ij)²`, reference track = 0; normal equations solved per connected component;
+residuals, outlier edges (>3×robust sigma), per-track confidence; optional IRLS (Huber reweighting,
+measured to be significantly better than plain WLS under outlier-edge contamination). 50 tracks/1225 edges solve in ~12 ms.
 
-残差 GCC（静音窗跳过）· coherence · polarity（MSC 低 ≠ 反相——
-corr(x,y) vs corr(x,-y) 对比）· 加权证据聚合（coarse 0.25 / drift R²
-0.20 / 残差 0.25 / coherence 0.15 / polarity 0.15）。
+## 12. Validation and confidence (Phase 7, validation/, ADR-012)
 
-* **GCC 反相感知**（fine/）：反相对的相关峰为负，负峰明显更强
-  （>1.2×）时翻转相关面分析并返回 `polarity=-1`——没有它反相对的
-  drift 整体失效（实测）；
-* **验证在校正后信号上进行**：原始漂移对 coherence 天然崩溃
-  （120 ppm/30 s 实测 MSC≈0.026），漂移抹平不是失配证据。
+Residual GCC (silent windows skipped) · coherence · polarity (low MSC ≠ inverted polarity —
+compare corr(x,y) vs corr(x,-y)) · weighted evidence aggregation (coarse 0.25 / drift R²
+0.20 / residual 0.25 / coherence 0.15 / polarity 0.15).
 
+* **GCC polarity-aware** (fine/): the correlation peak of an inverted-polarity pair is negative, and when the negative
+  peak is clearly stronger (>1.2×) the correlation surface analysis is flipped and `polarity=-1` is returned — without it,
+  drift estimation on inverted-polarity material fails entirely (measured);
+* **validation runs on the corrected signal**: raw drift makes coherence collapse naturally
+  (120 ppm/30 s measured MSC≈0.026), and a washed-out drift peak is not evidence of a mismatch.

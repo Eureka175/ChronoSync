@@ -1,34 +1,40 @@
-# ADR-003：全局 Offset 符号约定
+# ADR-003: Global offset sign convention
 
-**状态：** Accepted（2025，Phase 1）
-**影响面：** 所有模块的 docstring、类型名、JSON、CSV、测试、CLI、文档
+**Status:** Accepted (2025, Phase 1)
+**Impact:** docstrings, type names, JSON, CSV, tests, CLI and documentation of every module
 
-## 决策
+## Decision
 
-全项目唯一 offset 定义：
+The one project-wide offset definition:
 
 ```text
 d = t_target - t_reference
 ```
 
-`d > 0` ⇔ 同一事件在 target 中出现得**更晚**。
+`d > 0` ⇔ the same event occurs **later** in the target.
 
-## 动机
+## Rationale
 
-符号方向是最隐蔽的系统性 bug 来源（对齐结果整体反号、drift 斜率反号、
-图求解发散）。集中定义一次，其余模块一律引用。
+Sign direction is the most insidious source of systematic bugs (an alignment
+result reversed wholesale, a drift slope with the wrong sign, a diverging graph
+solve). Define it centrally once, and have every other module reference it.
 
-## 细节
+## Details
 
-* GCC 实现采用 `gcc[j] = IFFT(conj(R)·T)[j] ≈ Σ ref[n]·tgt[n+j]`，
-  使 `delay_samples` 与定义一致（+N ⇔ target 滞后 N）。
-  注意 `scipy.signal.correlate(a, v)` 方向相反，测试中已显式固化对照。
-* `TimeMap`（ADR-005）用 `T_global = f(T_local)`，秒为单位；样本转换
-  只在边界用规范采样率完成。
-* 合成框架 `delay_samples(x, n)` 语义 `y[n+k] = x[k]` 与约定严格一致。
-* 单元测试固化方向：`gcc(ref,tgt).delay ≈ -gcc(tgt,ref).delay`。
+* The GCC implementation uses `gcc[j] = IFFT(conj(R)·T)[j] ≈ Σ ref[n]·tgt[n+j]`,
+  keeping `delay_samples` consistent with the definition (+N ⇔ target lags by N).
+  Note that `scipy.signal.correlate(a, v)` points the opposite way; the tests
+  pin that contrast explicitly.
+* `TimeMap` (ADR-005) uses `T_global = f(T_local)`, in seconds; sample
+  conversion is performed only at the boundaries, using the canonical sample
+  rate.
+* The synthetic framework's `delay_samples(x, n)` with the semantics
+  `y[n+k] = x[k]` agrees strictly with the convention.
+* Unit tests pin the direction: `gcc(ref,tgt).delay ≈ -gcc(tgt,ref).delay`.
 
-## 后果
+## Consequences
 
-* 任何新模块不得自行定义方向；冲突时以本 ADR 为准并修复冲突模块。
-* 对外输出（CLI/JSON/CSV）直接复用模型字段，避免二次解释。
+* No new module may define its own direction; in case of conflict this ADR
+  prevails and the conflicting module is fixed.
+* External outputs (CLI/JSON/CSV) reuse the model fields directly, avoiding any
+  second interpretation.

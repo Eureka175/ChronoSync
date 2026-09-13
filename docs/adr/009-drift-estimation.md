@@ -1,42 +1,53 @@
-# ADR-009：Drift 估计方法
+# ADR-009: Drift estimation method
 
-**状态：** Accepted（2025，Phase 4）
-**影响面：** drift/、models/timemap.py
+**Status:** Accepted (2025, Phase 4)
+**Impact:** drift/, models/timemap.py
 
-## 决策
+## Decision
 
 ```text
-窗口 GCC（target 窗按粗 offset 放置 → 测残差，prior 解歧义）
-→ OffsetMeasurement 序列（记录完整 d(t) = 残差 + d0）
-→ 鲁棒加权回归（MAD 离群剔除）
-→ 变点检测 → 分类 → TimeMap
+windowed GCC (the target window is placed at the coarse offset → measure the residual, the prior resolves ambiguity)
+→ a sequence of OffsetMeasurement (recording the complete d(t) = residual + d0)
+→ robust weighted regression (MAD outlier rejection)
+→ changepoint detection → classification → TimeMap
 ```
 
-## 关键实现决策
+## Details
 
-1. **窗口放置与残差测量**：target 窗口放在 `center + d0`，GCC 测残差
-   （数值更稳）；`OffsetMeasurement.offset_samples` 记录**完整** d(t)
-   （内部实现细节不外泄）。
-2. **自适应窗口收缩**：PHAT 每频点等权投票——噪声类内容在窗口内漂移
-   超过 ~1 个相干长度时长窗 GCC 失明（实测 60 s 白噪声 @150 ppm 单窗
-   完全失效）。默认 30 s 起，不足 12 个可用窗口则半衰收缩至 0.5 s 下限。
-3. **变点检测 = 加权 SSE 改进 + 效应量门限**：两段拟合的 SSE 改进
-   ≥ 25% 且（台阶 ≥ 100 样本 或 斜率变化 ≥ 4 ppm）才切分。纯 SSE 判据
-   在 50% 重叠窗口的相关噪声下假分裂（实测常数偏移对被切成 3 段）。
-   台阶与斜率变化统一检测：CLOCK_DISCONTINUITY（台阶）vs
-   piecewise_drift（斜率变化）。
-4. **符号与单位**：`d(t) = α·t + β`（ADR-003，β 为样本）；
-   `T_global = τ/(1+α) − β/(sr(1+α))`；constant 情形 offset_seconds =
-   −β/sr（实测修复过符号）。
-5. **断点 TimeMap 建模**：断点处两段映射到同一全局时刻 → 平段（drop 的
-   空隙或 insert 的重复区间），校正时输出静音/跳过；负向局部跳变
-   （内容丢失）显式警告。
-6. **校正 = SoXR 异步重采样**（ADR-002 的变速率能力），非 phase vocoder；
-   全局 0 之前的内容丢弃并警告。
+1. **Window placement and residual measurement**: the target window is placed at
+   `center + d0` and GCC measures the residual (numerically more stable);
+   `OffsetMeasurement.offset_samples` records the **complete** d(t)
+   (internal implementation details never leak out).
+2. **Adaptive window shrinking**: PHAT votes with equal weight per frequency
+   bin — for noise-like content, once the drift inside the window exceeds
+   ~1 coherence length the windowed GCC goes blind (measured: a single window
+   over 60 s of white noise @150 ppm fails completely). The default starts at
+   30 s and, if fewer than 12 usable windows are found, halves down to a
+   0.5 s floor.
+3. **Changepoint detection = weighted SSE improvement + effect-size gate**: a
+   split is made only when the SSE improvement of the two-segment fit is
+   ≥ 25% and (the step is ≥ 100 samples or the slope change is ≥ 4 ppm). A
+   pure SSE criterion false-splits on correlated noise from 50%-overlapping
+   windows (measured: a constant-offset pair was cut into 3 segments). Steps
+   and slope changes are detected uniformly: CLOCK_DISCONTINUITY (step) vs
+   piecewise_drift (slope change).
+4. **Sign and units**: `d(t) = α·t + β` (ADR-003, β in samples);
+   `T_global = τ/(1+α) − β/(sr(1+α))`; in the constant case offset_seconds =
+   −β/sr (measured; this fixed a sign error).
+5. **TimeMap modelling at breakpoints**: at a breakpoint the two segments map
+   to the same global instant → a flat segment (the gap of a drop or the
+   repeated interval of an insert), rendered as silence/skipping during
+   correction; a negative local jump (lost content) raises an explicit
+   warning.
+6. **Correction = SoXR asynchronous resampling** (the variable-rate capability
+   of ADR-002), not a phase vocoder; content before global 0 is discarded with
+   a warning.
 
-## 后果
+## Consequences
 
-* `correct_track` 是可选渲染；默认输出仍是 TimeMap（非破坏性）；
-* 分类结果（no_overlap/constant/clock_drift/piecewise/discontinuity）
-  进入置信度证据链（Phase 7）；
-* 白噪声类内容的短窗需求是物理约束，测试用显式 config 固化。
+* `correct_track` is an optional rendering step; the default output is still
+  the TimeMap (non-destructive);
+* the classification result (no_overlap/constant/clock_drift/piecewise/discontinuity)
+  enters the evidence-weighted confidence chain (Phase 7);
+* the short-window requirement for white-noise-like content is a physical
+  constraint, pinned in tests through an explicit config.

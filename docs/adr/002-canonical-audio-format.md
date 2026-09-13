@@ -1,43 +1,66 @@
-# ADR-002：内部规范音频格式
+# ADR-002: Canonical internal audio format
 
-**状态：** Accepted（2025，Phase 1）
-**影响面：** io/、fine/、features/ 及一切核心 DSP
+**Status:** Accepted (2025, Phase 1)
+**Impact:** io/, fine/, features/ and every core DSP module
 
-## 决策
+## Decision
 
-进入核心 DSP 前统一为：
+Before entering the core DSP everything is unified to:
 
 ```text
 sample rate = 48000 Hz
 dtype       = float32
-channels    = mono（分析在质量加权 downmix 上进行，左/右声道数组保留）
+channels    = mono (analysis runs on a quality-weighted downmix; the left/right channel arrays are retained)
 ```
 
-## 动机
+## Rationale
 
-统一的内部格式让所有下游模块（GCC、特征、drift）免除对输入采样率/位深
-/声道数的分支处理；48 kHz 是现场录音设备的常见时钟，整数到浮点的转换
-放在解码边界只做一次。
+A unified internal format frees every downstream module (GCC, features, drift)
+from branching on the input sample rate / bit depth / channel count; 48 kHz is
+the common clock of location recording devices, and integer-to-float conversion
+is performed only once, at the decoding boundary.
 
-## 细节与约束
+## Details and constraints
 
-1. **重采样只允许高质量 sinc/polyphase**：默认 SoXR（`soxr` 包，
-   quality="HQ"）；未安装时 fallback `scipy.signal.resample_poly` 并发出
-   警告（质量低于 SoXR）。
-   **`numpy.interp` 被明令禁止**作为音频重采样方案（线性插值，非带限）。
-2. **Stereo 处理**：保留 `left` / `right` / `mono_mix`；默认用
-   `mono_mix`。声道权重 = `max(1 - clip_fraction, 1e-3)²`：持续削波的
-   声道**降权而不删除**（clip 判定：|x| ≥ 0.999 的样本占比）。
-3. **长文件**：短文件整段进 RAM（`read_canonical`）；长文件流式
-   （`iter_chunks`）。已知限制：分块重采样的边缘瞬态由 Phase 4 drift 层
-   缝合，Phase 1 文档如实标注。
-4. 输入格式覆盖（Phase 1 已支持）：WAV/BWF/RF64/FLAC 等（libsndfile），
-   44.1/48/其他采样率，16/24 bit int 与 32 bit float，mono/stereo/多声道。
-5. `DecodedAudio` 始终携带 `source_sample_rate`、每声道 `clip_fraction`
-   与解码警告，供上层做质量决策。
+1. **Resampling is only permitted with high-quality sinc/polyphase**: SoXR by
+   default (the `soxr` package, quality="HQ"); when it is not installed, fall
+   back to `scipy.signal.resample_poly` and emit a warning (lower quality than
+   SoXR).
+   **`numpy.interp` is explicitly forbidden** as an audio resampling scheme
+   (linear interpolation, not band-limited).
+2. **Stereo handling**: `left` / `right` / `mono_mix` are retained; `mono_mix`
+   is used by default. Channel weight = `max(1 - clip_fraction, 1e-3)²`: a
+   persistently clipping channel is **down-weighted, not deleted** (clip
+   criterion: fraction of samples with |x| ≥ 0.999).
+3. **Long files**: short files are read into RAM whole (`read_canonical`); long
+   files are streamed (`iter_chunks`). Known limitation: the edge transients of
+   chunked resampling are stitched by the Phase 4 drift layer; the Phase 1
+   documentation states this honestly.
+4. Input format coverage (already supported in Phase 1): WAV/BWF/RF64/FLAC etc.
+   (libsndfile), 44.1/48/other sample rates, 16/24 bit int and 32 bit float,
+   mono/stereo/multichannel.
+5. `DecodedAudio` always carries `source_sample_rate`, the per-channel
+   `clip_fraction` and decoding warnings, so that upper layers can make quality
+   decisions.
+6. **Container integrity (added in Phase 7 after CI findings)**: when reading
+   multi-stream containers (MP4 with several mono PCM streams), decoding must
+   be performed in the CONTENT domain:
+   * FFmpeg extraction always passes `-ignore_editlist 1` — an edit list (which
+     some muxers write to align audio to video) trims the head of a stream on
+     some FFmpeg versions (measured: 305 samples with FFmpeg 6 on Linux, none
+     with FFmpeg 8 on Windows), which silently biases every relative delay;
+   * container `start_time` is reported as INFORMATION ONLY and is never added
+     to a measured delay (that would double-count);
+   * all streams of one recording must decode to EQUAL sample counts; unequal
+     lengths are reported as a container anomaly with the warning
+     "bias = trimmed samples", never absorbed silently.
+   Rationale: a measurement that is quietly off by a few hundred samples is
+   worse than no measurement — the pipeline must detect and report the
+   condition instead of returning a plausible-looking number.
 
-## 后果
+## Consequences
 
-* 所有以"样本"为单位的 API 都指 48 kHz 规范样本（见 ADR-003）。
-* 换 96 kHz 或 float64 内部格式属于架构级变更，需新 ADR 并重跑全部
-  benchmark。
+* Every API whose unit is "samples" refers to 48 kHz canonical samples (see
+  ADR-003).
+* Switching to a 96 kHz or float64 internal format is an architectural change,
+  requiring a new ADR and a rerun of all benchmarks.

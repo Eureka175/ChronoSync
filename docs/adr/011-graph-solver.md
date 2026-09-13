@@ -1,36 +1,48 @@
-# ADR-011：多轨全局图求解
+# ADR-011: Multi-track global graph solve
 
-**状态：** Accepted（2025，Phase 6）
-**影响面：** global_alignment/、pipeline.py、export/
+**Status:** Accepted (2025, Phase 6)
+**Impact:** global_alignment/, pipeline.py, export/
 
-## 决策
+## Decision
 
 ```text
 tracks = nodes; measurements = weighted directed edges (ADR-003)
 min Σ w_ij (t_i - t_j - d_ij)^2,  reference track pinned at 0
 ```
 
-* 参考轨：显式指定或自动选择"最连接"轨道（Σ 入射边置信度最大）；
-* **连通分量独立求解**：与参考轨不连通的组件各自锚定并**大声警告**
-  ——求解器绝不静默混用不相关时间线；
-* 每条边输出残差；|残差| > 3×robust sigma（MAD 尺度）的边标记为离群；
-* 每轨置信度 = 入射边（置信度加权的）一致性：`agreement =
-  1 - |residual|/(3σ)`，参考轨恒为 1；
-* 可选 **IRLS**（`irls_iterations > 0`）：Huber 式重加权迭代，离群边
-  失去影响力；实测离群边污染下 IRLS 解显著优于普通 WLS。
-  Huber/IRLS 之外（RANSAC 等）刻意推迟——第一版不过度复杂。
+* Reference track: explicitly specified or chosen automatically as the
+  "most connected" track (largest Σ of incident-edge confidence);
+* **connected components are solved independently**: components not connected
+  to the reference track are anchored on their own and **warned about loudly**
+  — the solver never silently mixes unrelated timelines;
+* every edge reports a residual; edges with |residual| > 3×robust sigma
+  (MAD scale) are flagged as outliers;
+* per-track confidence = the (confidence-weighted) agreement of the incident
+  edges: `agreement = 1 - |residual|/(3σ)`, and the reference track is always
+  1;
+* optional **IRLS** (`irls_iterations > 0`): Huber-style reweighting
+  iterations, in which outlier edges lose their influence; measured, the IRLS
+  solution is significantly better than plain WLS under outlier-edge
+  contamination. Beyond Huber/IRLS (RANSAC and friends) is deliberately
+  deferred — the first version does not over-engineer.
 
-## 关键实现决策
+## Details
 
-* 正规方程按分量构建：自由节点 A·t = b，参考轨项移入 RHS；奇异系统
-  回退最小二乘并警告；
-* 无测量边的轨道**不出现在图中**——由 pipeline 显式报告
-  （"matched nothing; excluded"），绝不静默放置；
-* 未直接与参考轨测量的轨道用求解常数 offset 放置并警告（跨未测量对的
-  TimeMap 复合是文档化的未来工作）。
+* The normal equations are built per component: free nodes A·t = b, with the
+  reference-track terms moved to the RHS; a singular system falls back to
+  least squares with a warning;
+* tracks without measurement edges **do not appear in the graph** — the
+  pipeline reports them explicitly ("matched nothing; excluded") and never
+  places them silently;
+* tracks not measured directly against the reference track are placed using
+  the solved constant offset, with a warning (composing TimeMaps across
+  unmeasured pairs is documented future work).
 
-## 后果
+## Consequences
 
-* 边方向/符号沿用 ADR-003，求解器不做任何方向推断；
-* benchmark：50 轨 / 1225 边 WLS 求解 ~12 ms——多轨规模不是瓶颈；
-* 残差与每轨置信度直接进入 Phase 7 证据链与 JSON/CSV 导出。
+* Edge direction/sign follows ADR-003; the solver performs no direction
+  inference of its own;
+* benchmark: WLS solve over 50 tracks / 1225 edges ≈ 12 ms — multi-track scale
+  is not the bottleneck;
+* residuals and per-track confidence flow directly into the Phase 7 evidence
+  chain and the JSON/CSV export.

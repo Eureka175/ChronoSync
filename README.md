@@ -132,8 +132,10 @@ Reference:  a.wav
 | `docs/adr/` | ADR 001–012 (design decisions) |
 | `handoff/mp4_channel_sync/README.md` | Standalone algorithm package for external tools |
 
-> Most detailed documents are currently written in Chinese; an English
-> translation is in progress. Issues/PRs in English are welcome.
+> Core documents (`docs/architecture.md`, `docs/algorithms.md`,
+> `docs/offset_convention.md`) and all ADRs are in English; the Phase-0
+> research notes, the real-world case study and the external handoff package
+> are currently in Chinese. Issues and pull requests in English are welcome.
 
 ## Roadmap
 
