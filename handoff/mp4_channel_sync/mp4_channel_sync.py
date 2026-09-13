@@ -15,6 +15,13 @@ float32 mono 数组、只吐数组与测量结果。
 
 约定（方向）: delay = t_channel - t_reference; delay > 0 表示该通道
 到达更晚，修正时需整体**前移** delay。
+
+⚠️ 宿主解码时必须忽略容器 edit list（ffmpeg: ``-ignore_editlist 1``）：
+MP4 的 edit list（部分 muxer 用来把音频对齐到视频帧）在**部分 ffmpeg
+版本上会裁掉流的头部样本**，使延迟测量产生系统性偏差——实测同一份文件
+在 ffmpeg 6(Linux) 裁掉 305 样本（延迟 1223 → 918），ffmpeg 8(Windows)
+不裁。本包在**内容域**测量，前提是喂进来的数组为原始样本流；容器
+``start_time`` 只作信息记录，**不要**叠加到延迟上（会双重计数）。
 """
 
 from __future__ import annotations

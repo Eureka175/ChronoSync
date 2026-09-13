@@ -64,6 +64,8 @@ class ChannelResult:
     drift_alpha_ppm: float
     coherence: float
     duration_seconds: float
+    codec: str = "unknown"
+    start_time_seconds: float | None = None  # container presentation start (info)
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -76,6 +78,8 @@ class ChannelResult:
             "alpha_ppm": round(self.drift_alpha_ppm, 3),
             "coherence": round(self.coherence, 3),
             "duration_seconds": round(self.duration_seconds, 2),
+            "codec": self.codec,
+            "start_time_seconds": self.start_time_seconds,
             "warnings": list(self.warnings),
         }
 
@@ -124,6 +128,11 @@ def measure_stream(
     with tempfile.TemporaryDirectory() as tmp:
         wav = extract_stream(path, stream, Path(tmp) / "ch.wav", limit_seconds)
         audio = read_canonical(wav).mono_mix
+    if not stream.codec.startswith("pcm"):
+        warnings.append(
+            f"lossy/non-PCM codec '{stream.codec}': encoder priming may bias "
+            "the measured delay"
+        )
     common = min(audio.size, reference_audio.size)
     ref = reference_audio[:common]
     tgt = audio[:common]
@@ -135,6 +144,7 @@ def measure_stream(
             delay_samples=float("nan"), delay_ms=float("nan"),
             confidence=0.0, drift_classification="none", drift_alpha_ppm=0.0,
             coherence=0.0, duration_seconds=len(audio) / SR,
+            codec=stream.codec, start_time_seconds=stream.start_time,
             warnings=[*gcc.warnings, "GCC failed"],
         )
     est = estimate_drift(ref, tgt, SR, coarse_offset_samples=gcc.delay_samples, config=DRIFT_CONFIG)
@@ -149,6 +159,8 @@ def measure_stream(
         drift_alpha_ppm=est.model.alpha_ppm,
         coherence=mean_coherence(ref, tgt, SR),
         duration_seconds=len(audio) / SR,
+        codec=stream.codec,
+        start_time_seconds=stream.start_time,
         warnings=warnings,
     )
 
@@ -158,7 +170,13 @@ def measure_file(
     reference_stream: int = 2,
     limit_seconds: float | None = None,
 ) -> list[ChannelResult]:
-    """Measure ALL audio streams of one file against the reference stream."""
+    """Measure ALL audio streams of one file against the reference stream.
+
+    Measurements are made in the CONTENT domain: extraction ignores muxer
+    edit lists (``-ignore_editlist 1``), so a stream whose head was trimmed
+    by a container edit list is still measured correctly. ``start_time`` is
+    reported per channel for transparency but is NOT added to the delay.
+    """
     streams = probe_audio_streams(path)
     if reference_stream >= len(streams):
         raise ValueError(f"reference stream {reference_stream} not present")
@@ -175,6 +193,7 @@ def measure_file(
                         stream=i, delay_samples=0.0, delay_ms=0.0, confidence=1.0,
                         drift_classification="reference", drift_alpha_ppm=0.0,
                         coherence=1.0, duration_seconds=len(ref_audio) / SR,
+                        codec=stream.codec, start_time_seconds=stream.start_time,
                     )
                 )
             else:

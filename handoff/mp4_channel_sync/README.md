@@ -202,9 +202,18 @@ confidence/polarity/success`）。需要定制搜索区间或直接拿峰值信�
 
 ```powershell
 # 逐流解码为 float32 原始 PCM（无重封装，最快路径）
-ffmpeg -v error -i in.MP4 -map 0:a:0 -f f32le -ac 1 -ar 48000 pipe:1 > ch0.f32
-ffmpeg -v error -i in.MP4 -map 0:a:1 -f f32le -ac 1 -ar 48000 pipe:1 > ch1.f32
+# ⚠️ -ignore_editlist 1 必须加，原因见下方说明
+ffmpeg -v error -ignore_editlist 1 -i in.MP4 -map 0:a:0 -f f32le -ac 1 -ar 48000 pipe:1 > ch0.f32
+ffmpeg -v error -ignore_editlist 1 -i in.MP4 -map 0:a:1 -f f32le -ac 1 -ar 48000 pipe:1 > ch1.f32
 ```
+
+> ⚠️ **务必忽略 edit list（`-ignore_editlist 1`）——这不是可选项。**
+> MP4 的 edit list（部分 muxer 用来把音频对齐到视频帧）在**部分 ffmpeg
+> 版本上会裁掉流的头部样本**：实测同一份 4 流 MP4，Linux ffmpeg 6 解码时
+> ch0 被裁掉 305 样本（测得延迟从 1223 变成 918），Windows ffmpeg 8 不裁。
+> 只有取原始样本流，测量结果才等于内容真值且跨平台稳定；容器 `start_time`
+> 仅作信息记录，**不要**叠加到延迟上（会双重计数）。若宿主因故无法忽略
+> edit list，则必须自行把 `(start_stream − start_reference)` 补偿进测量值。
 
 ```python
 import numpy as np
@@ -308,6 +317,8 @@ python test_mp4_channel_sync.py     # 16 项断言，秒级，零外部依赖，
 | 窗口偏移不一致（极差>2 样本或 \|ppm\|≥20） | `constant=False` + 警告 | 该文件疑似异常（非纯固定延迟），不要强行单一延迟修正 |
 | 置信度 < 0.3 | 仍返回结果但 confidence 低 | 按失败处理（见 6.2 的质量门） |
 | 采样率非 48 kHz | 传 `sample_rate` 参数即可（毫秒换算/窗长按此缩放） | 建议统一 48 kHz 以复用全部默认参数 |
+| **容器 edit list 裁头**（MP4 常见） | 解码未加 `-ignore_editlist 1` 时，部分 ffmpeg 版本会裁掉流头部样本 → 延迟系统性偏差（实测 305 样本） | 解码时强制 `-ignore_editlist 1`；否则自行补偿 `start_time` 差值 |
+| 有损编码流（AAC/MP3…） | 编码器 priming 会引入固定偏移 | 本包面向 PCM 多流素材；有损素材需先确认 priming 已被容器正确裁除 |
 
 ---
 

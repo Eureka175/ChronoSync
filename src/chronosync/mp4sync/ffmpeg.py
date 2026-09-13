@@ -23,6 +23,8 @@ class StreamInfo:
     audio_pos: int  # 0-based audio position (0:a:N)
     codec: str = "unknown"
     channels: int = 0
+    start_time: float | None = None  # container presentation time of sample 0 (s)
+    duration: float | None = None
 
 
 def require_ffmpeg() -> None:
@@ -32,12 +34,20 @@ def require_ffmpeg() -> None:
 
 
 def probe_audio_streams(path: str | Path) -> list[StreamInfo]:
-    """Enumerate the audio streams of a media file via ffprobe."""
+    """Enumerate the audio streams of a media file via ffprobe.
+
+    ``start_time`` is the container presentation time of the stream's first
+    sample; different muxers/versions may write edit lists that shift it
+    (measured: ffmpeg 6 on Linux wrote a 305-sample offset where ffmpeg 8 on
+    Windows wrote 0). Callers must account for it — see
+    :func:`chronosync.mp4sync.measure_file`.
+    """
     require_ffmpeg()
     out = subprocess.run(
         [
             "ffprobe", "-v", "error",
-            "-show_entries", "stream=index,codec_type,codec_name,channels",
+            "-show_entries",
+            "stream=index,codec_type,codec_name,channels,start_time,duration",
             "-of", "json", str(path),
         ],
         check=True, capture_output=True, text=True,
@@ -54,10 +64,19 @@ def probe_audio_streams(path: str | Path) -> list[StreamInfo]:
                 audio_pos=audio_pos,
                 codec=str(s.get("codec_name", "unknown")),
                 channels=int(s.get("channels", 0)),
+                start_time=_opt_float(s.get("start_time")),
+                duration=_opt_float(s.get("duration")),
             )
         )
         audio_pos += 1
     return streams
+
+
+def _opt_float(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def extract_stream(
@@ -66,10 +85,18 @@ def extract_stream(
     out_wav: str | Path,
     limit_seconds: float | None = None,
 ) -> Path:
-    """Exact PCM copy of one audio stream to a WAV (no resampling)."""
+    """Exact PCM copy of one audio stream to a WAV (no resampling).
+
+    ``-ignore_editlist 1`` is deliberate: edit lists (which some muxers write
+    to align audio to video) would otherwise TRIM the head of the decoded
+    stream on some ffmpeg versions, silently biasing every delay measurement.
+    We want the raw sample stream; container offsets are reported separately
+    via :attr:`StreamInfo.start_time`.
+    """
     require_ffmpeg()
     cmd = [
-        "ffmpeg", "-v", "error", "-y", "-i", str(path),
+        "ffmpeg", "-v", "error", "-y", "-ignore_editlist", "1",
+        "-i", str(path),
         "-map", f"0:a:{stream.audio_pos}",
     ]
     if limit_seconds:

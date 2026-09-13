@@ -44,6 +44,15 @@
 * 真实素材验证：19 片 4K MP4（4×mono PCM），逐片测量无线麦延迟
   （19.7–29.5 ms，片内恒定），修正后复检残差 < 0.05 ms
 
+### 修复
+
+* **MP4 edit list 导致的延迟测量偏差**（CI 双平台复现后定位）：部分
+  ffmpeg 版本（实测 Linux ffmpeg 6）会按容器 edit list 裁掉流头部样本，
+  使 GCC 测得的延迟系统性偏小（同一测试素材 1223 → 918 样本）；
+  提取时统一加 `-ignore_editlist 1` 取原始样本流，测量回到内容域并与
+  平台无关；容器 `start_time` 改为随报告输出（信息项，不叠加，
+  避免双重计数）。交付包文档同步增加该集成警告。
+
 ### 文档
 
 * `docs/architecture.md` / `docs/algorithms.md` / `docs/offset_convention.md`

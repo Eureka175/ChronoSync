@@ -57,11 +57,17 @@ def test_measure_planted_delays(tmp_path):
     mp4 = _build_test_mp4(tmp_path)
     results = measure_file(mp4, reference_stream=2, limit_seconds=10.0)
     delays = {r.stream: r.delay_samples for r in results}
+    # Diagnostics: container start offsets are informational only. Extraction
+    # ignores edit lists, so the CONTENT-domain delay stays exact — this is
+    # the regression guard for the ffmpeg-6-vs-8 edit-list trimming
+    # difference (305 samples) that broke CI once.
+    print("stream start_times:", {r.stream: r.start_time_seconds for r in results})
     assert abs(delays[0] - D1) < 1.0
     assert abs(delays[1] - D2) < 1.0
     assert abs(delays[2] - 0.0) < 0.5
     assert abs(delays[3] - 0.0) < 0.5
     assert results[0].drift_classification in ("constant_offset", "clock_drift")
+    assert all(r.codec.startswith("pcm") for r in results)
 
 
 def test_full_fix_remux_verify_loop(tmp_path):
