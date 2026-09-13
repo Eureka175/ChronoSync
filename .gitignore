@@ -1,0 +1,40 @@
+# ------------------------------------------------------------------ Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# -------------------------------------------------------------- Environments
+.venv/
+venv/
+env/
+
+# --------------------------------- 原始素材与生成物（体积大 / 可重新生成）
+# 用户现场拍摄素材（本目录内实测 22 GB）：保留在本地，绝不入库
+textvid/
+# 演示、分析、修正输出（随时可重新生成）
+demo/
+*.f32
+*_fixed.MP4
+*_fixed_ch*.wav
+*_fixed_audio.wav
+
+# --------------------- 第三方参考物料（版权归属外部，入库只保留引用与链接）
+# 调研时下载的第三方源码克隆
+docs/research/_repos/
+# Adobe 官方 API 类型定义（调研引用件，按需自行获取）
+docs/research/notes/_audition_api.d.ts
+# 第三方广播台真实 .sesx 样例（调研引用件，按需自行获取）
+docs/research/notes/*.sesx
+
+# ---------------------------------------------------------------- OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

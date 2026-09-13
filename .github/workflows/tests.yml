@@ -1,0 +1,39 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install ffmpeg (MP4 pipeline tests)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[io,dev]"
+
+      - name: Run test suite
+        run: python -m pytest -q
+
+      - name: Standalone handoff package self-test
+        run: python handoff/mp4_channel_sync/test_mp4_channel_sync.py
+
+      - name: Benchmark smoke (GCC suite)
+        run: python benchmarks/benchmark_gcc.py
