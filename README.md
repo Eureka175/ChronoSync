@@ -1,87 +1,99 @@
 # ChronoSync
 
-**v0.1.0-beta** · MIT · Python 3.12+
+**v0.1.0-beta** · MIT · Python 3.12+ · [中文文档](README.zh-CN.md)
 
-> 面向独立录音设备、多机位现场录音和长时间录音的多轨音频**时间基准估计**、
-> **自动对齐**与**时钟漂移校正**系统。
+> Multi-track audio **timebase estimation**, **automatic alignment** and
+> **clock-drift correction** for independent recorders, multi-camera location
+> sound and long-duration recordings.
 
-ChronoSync 不是"又一个自动同步 WAV 的工具"。它的核心对象不是 offset，
-而是 **TimeMap**：
+ChronoSync is not "yet another tool that finds the offset between two WAVs".
+Its core object is not an offset but a **TimeMap**:
 
 ```text
 T_global = f_i(T_i)
 ```
 
-每条录音都是从设备本地时间到统一参考时间的映射：最简单是
-`T = a·t + b`（a = clock scale/drift，b = 固定偏移），复杂情况允许
-piecewise-linear（分段漂移、局部断点）。固定 offset、clock drift、
-CLOCK_DISCONTINUITY 全部统一为一个抽象。
+Every recording is a mapping from the device's local timeline onto a unified
+reference timeline — the simplest case being `T = a·t + b` (`a` = clock
+scale/drift, `b` = fixed offset), with piecewise-linear maps covering
+segmented drift and local discontinuities. Fixed offsets, clock drift and
+CLOCK_DISCONTINUITY are all expressed through one abstraction.
 
 ```text
-多个独立录音设备 → 识别共同内容/重叠 → 粗定位 → 局部高精度对齐
-→ 估计 clock drift → 每条轨道的时间映射 → 多轨全局约束求解
-→ 异常/断点/不可靠测量检测 → 验证 → 统一时间轴 → DAW 工程导出
+independent recorders → find shared content / overlap → coarse locate
+→ local high-precision alignment → estimate clock drift → per-track time map
+→ multi-track global constraint solve → detect anomalies / discontinuities /
+unreliable measurements → validate → unified timeline → DAW project export
 ```
 
-## 状态：Phase 5-7（当前）
+## Status: Phases 1–7 complete
 
-已完成：Phase 1（骨架/GCC/CLI）+ Phase 3（特征/缓存/粗匹配级联）+
-Phase 4（drift 估计/TimeMap/校正）+ **Adobe Audition SESX 导出** +
-**Phase 5（Overlap/Segment）+ Phase 6（多轨图求解）+ Phase 7（验证/置信度）**
-+ JSON/CSV 导出 + CLI `batch` 多轨批处理。
+Delivered: Phase 1 (skeleton / GCC-PHAT / CLI), Phase 3 (features / cache /
+coarse cascade), Phase 4 (drift estimation / TimeMap / correction),
+**Adobe Audition SESX export**, **Phase 5 (overlap/segments)**,
+**Phase 6 (multi-track graph solver)**, **Phase 7 (validation & confidence)**,
+JSON/CSV export, the `batch` multi-track CLI, and a dedicated **MP4
+wireless-microphone channel-sync pipeline**.
 
-| 组件 | 状态 |
+| Component | Status |
 | --- | --- |
-| 技术调研（AudioAlign/Aurio/audalign/alignaudio/WhisperSync/音频栈/SESX） | ✅ `docs/research/` |
-| 核心数据模型（AudioTrack/MatchResult/GCCResult/DriftModel/TimeMap/AlignmentEdge/AlignmentGraph/TrackAlignment） | ✅ `src/chronosync/models/` |
-| I/O（probe / 解码 / SoXR 重采样 / 流式分块） | ✅ `src/chronosync/io/` |
-| Synthetic Framework（seed 化） | ✅ `synthetic/` |
-| GCC-PHAT（正则化白化、峰值策略、prior、亚样本、**反相感知**、可解释 confidence） | ✅ `src/chronosync/fine/` |
-| 特征层 + 特征缓存（ADR-006） | ✅ `features/` + `cache/` |
-| 粗匹配级联（ADR-008） | ✅ `src/chronosync/coarse/` |
-| Drift 估计 + SoXR 校正（ADR-009） | ✅ `src/chronosync/drift/` |
-| Overlap / Segment 检测（录音间隙 → 多段） | ✅ `src/chronosync/overlap/` |
-| 多轨图求解（WLS/IRLS、连通分量、残差、每轨置信度，ADR-011） | ✅ `src/chronosync/global_alignment/` |
-| 验证层（残差 GCC/coherence/polarity/置信度聚合，ADR-012） | ✅ `src/chronosync/validation/` |
-| 导出：SESX（ADR-010）+ JSON + CSV | ✅ `src/chronosync/export/` |
-| 多轨编排（batch_align：全对配对→图求解→导出） | ✅ `src/chronosync/pipeline.py` |
-| 单元/集成测试（**191 项**） | ✅ `tests/` |
-| Benchmark（gcc/features/drift/solve） | ✅ `benchmarks/` |
-| CLI（info / gcc / align / **batch** / test-gcc / benchmark / --json） | ✅ `chronosync` |
-| Reaper RPP 导出 / 真实录音基准 | ⏳ Phase 8-9 |
+| Prior-art research (AudioAlign/Aurio/audalign/alignaudio/WhisperSync/audio stack/SESX) | ✅ `docs/research/` |
+| Core data models (AudioTrack/MatchResult/GCCResult/DriftModel/TimeMap/AlignmentEdge/AlignmentGraph/TrackAlignment) | ✅ `src/chronosync/models/` |
+| I/O (probe / decode / SoXR resampling / streaming chunks) | ✅ `src/chronosync/io/` |
+| Synthetic framework (seeded, 15 scenarios) | ✅ `synthetic/` |
+| GCC-PHAT (regularized whitening, peak policy, search prior, sub-sample, **polarity-aware**, interpretable confidence) | ✅ `src/chronosync/fine/` |
+| Features + feature cache (ADR-006) | ✅ `features/` + `cache/` |
+| Coarse-matching cascade (ADR-008) | ✅ `src/chronosync/coarse/` |
+| Drift estimation + SoXR correction (ADR-009) | ✅ `src/chronosync/drift/` |
+| Overlap / segment detection (recording gaps → multiple segments) | ✅ `src/chronosync/overlap/` |
+| Multi-track graph solver (WLS/IRLS, connectivity, residuals, per-track confidence, ADR-011) | ✅ `src/chronosync/global_alignment/` |
+| Validation (residual GCC / coherence / polarity / evidence-based confidence, ADR-012) | ✅ `src/chronosync/validation/` |
+| Export: SESX (ADR-010) + JSON + CSV | ✅ `src/chronosync/export/` |
+| Multi-track orchestration (`batch_align`: all-pairs → graph solve → export) | ✅ `src/chronosync/pipeline.py` |
+| MP4 wireless-mic channel sync (measure → fix → remux → verify) | ✅ `src/chronosync/mp4sync/` |
+| Unit / integration tests (**202 pytest + 16 standalone**) | ✅ `tests/`, `handoff/` |
+| Benchmarks (gcc / features / drift / solve) | ✅ `benchmarks/` |
+| CLI (`info` / `gcc` / `align` / `batch` / `mp4-sync` / `test-gcc` / `benchmark` / `--json`) | ✅ `chronosync` |
+| External-tool handoff package (numpy+scipy only) | ✅ `handoff/mp4_channel_sync/` |
+| Reaper RPP export / large-scale real-world benchmark | ⏳ Phase 8–9 |
 
-## 安装
+## Install
 
 ```bash
 pip install -e ".[io,dev]"     # Python 3.12+
 ```
 
-依赖：numpy、scipy（必需）；soundfile + soxr（io 可选但推荐）；
-pytest、psutil（dev/benchmark）。
+Dependencies: numpy, scipy (required); soundfile + soxr (optional, recommended
+for I/O); pytest, psutil (dev/benchmark). FFmpeg (any modern build) is needed
+only for the MP4 pipeline and the corresponding integration tests.
 
-## 快速开始
+## Quick start
 
 ```bash
-# 生成验收音频对（target = reference 延迟 12345 样本）
+# Build an acceptance pair (target = reference delayed by 12345 samples)
 python scripts/generate_demo_pair.py demo
 
-# 元数据 / 局部 GCC
+# Metadata / local GCC-PHAT
 chronosync info demo/reference.wav
 chronosync gcc demo/reference.wav demo/target.wav
 
-# 两轨完整流水线：粗匹配 → drift 估计 → TimeMap → SESX（可选）
+# Full two-track pipeline: coarse → drift → TimeMap → SESX (optional)
 chronosync align demo/reference.wav demo/target.wav --json
 chronosync align demo/reference.wav demo/target.wav --sesx session.sesx
 
-# 多轨批处理：全对配对 → 图求解 → JSON/CSV/SESX
+# Multi-track: all-pairs measurement → graph solve → JSON/CSV/SESX
 chronosync batch a.wav b.wav c.wav --json --csv align.csv --sesx session.sesx
 
-# 自检与基准
+# MP4 wireless-mic channel sync (per-file delays + optional fix/remux with verification)
+chronosync mp4-sync --folder D:\footage --json delays.json --csv delays.csv
+chronosync mp4-sync clip.MP4 --fix --remux --out-dir fixed
+
+# Self-check and benchmarks
 chronosync test-gcc
 chronosync benchmark --suite all        # gcc / features / drift / solve
 ```
 
-多轨输出示例：
+Multi-track output example:
 
 ```text
 Status:     success
@@ -91,46 +103,59 @@ Reference:  a.wav
   c.wav                 offset    -2998.1 samples  conf 0.940  map constant_offset
 ```
 
-## 项目约定（必须遵守）
+## Project conventions (mandatory)
 
-* **Offset 方向（ADR-003）**：`d = t_target - t_reference`；`d > 0` ⇔
-  target 中事件更晚。所有 docstring/JSON/CSV/测试/CLI 一致。
-* **规范音频格式（ADR-002）**：48 kHz / float32 / 质量加权 mono_mix
-  （left/right 保留）；重采样只用 SoXR（禁止 `np.interp`）。
-* **GCC 峰策略（ADR-004）**：绝不"全局最大 = 答案"；置信度来自可解释
-  证据（峰高/峰比/峰 prominence），阈值全部可配置。
-* **TimeMap（ADR-005）**：业务代码依赖映射接口，不直接操作 offset/alpha。
-* 测试原则：先定义数学行为 → 写测试 → 实现 → benchmark；禁止改测试掩盖问题。
+* **Offset sign (ADR-003)**: `d = t_target - t_reference`; `d > 0` means the
+  event occurs later in the target. Applied consistently across docstrings,
+  JSON, CSV, tests and the CLI.
+* **Canonical audio format (ADR-002)**: 48 kHz / float32 / quality-weighted
+  `mono_mix` (left/right retained); resampling only via SoXR (`np.interp` is
+  forbidden for audio).
+* **GCC peak policy (ADR-004)**: never "global maximum = answer"; confidence
+  comes from interpretable evidence (peak height / peak ratio / prominence),
+  and every threshold is configurable.
+* **TimeMap (ADR-005)**: business code depends on the mapping interface, never
+  on raw offset/alpha fields.
+* **Testing discipline**: define the mathematical behaviour → write the test →
+  implement → benchmark; tests are never weakened to hide a defect.
 
-## 文档
+## Documentation
 
-| 文档 | 内容 |
+| Document | Content |
 | --- | --- |
-| `docs/architecture.md` | 分层架构、数据流、包结构、依赖策略 |
-| `docs/algorithms.md` | GCC-PHAT、峰值策略、置信度、粗匹配级联、drift 估计、SESX、Overlap、图求解、验证 |
-| `docs/offset_convention.md` | 全项目 offset 符号规范 |
-| `docs/research/existing_projects.md` | 现有项目调研 + 技术差异矩阵 + 复用决策 |
-| `docs/research/notes/sesx_format.md` | SESX 格式逆向调研（时间单位=整数样本等） |
-| `docs/adr/` | 001-007 基础决策 + 008-coarse / 009-drift / 010-sesx / 011-graph-solver / 012-validation |
+| `docs/README.md` | Documentation index |
+| `docs/architecture.md` | Layered architecture, data flow, package layout, dependency policy |
+| `docs/algorithms.md` | All algorithms: GCC-PHAT, peak policy, confidence, coarse cascade, drift estimation, SESX, overlap, graph solve, validation |
+| `docs/offset_convention.md` | Project-wide offset sign and unit convention |
+| `docs/research/existing_projects.md` | Prior-art matrix and reuse/re-implement decisions |
+| `docs/mp4_wireless_delay_case.md` | Real-footage wireless-mic delay case study |
+| `docs/adr/` | ADR 001–012 (design decisions) |
+| `handoff/mp4_channel_sync/README.md` | Standalone algorithm package for external tools |
+
+> Most detailed documents are currently written in Chinese; an English
+> translation is in progress. Issues/PRs in English are welcome.
 
 ## Roadmap
 
 ```text
-Phase 0  现有项目调研                        ✅
-Phase 1  骨架 + 模型 + Synthetic + GCC + 测试 ✅
-Phase 2  GCC-PHAT 精化 + benchmark           ✅（并入 Phase 1）
-Phase 3  特征提取 + 缓存 + 粗匹配级联        ✅
-Phase 4  Drift 估计 + SoXR 校正              ✅
-Phase 5  Overlap / Segment 检测              ✅
-Phase 6  多轨图求解（WLS/IRLS + 连通性 + 残差）✅
-Phase 7  验证 / 置信度（残差/coherence/polarity）✅
-SESX 导出（Adobe Audition，非破坏性时间线）  ✅（ADR-010）
-JSON/CSV 导出 + 多轨 batch CLI               ✅
-Phase 8  真实录音 benchmark
-Phase 9  Reaper RPP 导出 + TimeMap 复合
+Phase 0  Prior-art research                        ✅
+Phase 1  Skeleton + models + synthetic + GCC       ✅
+Phase 2  GCC-PHAT refinement + benchmarks          ✅ (merged into Phase 1)
+Phase 3  Features + cache + coarse cascade         ✅
+Phase 4  Drift estimation + SoXR correction        ✅
+Phase 5  Overlap / segment detection               ✅
+Phase 6  Multi-track graph solver                  ✅
+Phase 7  Validation / confidence                   ✅
+         SESX export (Adobe Audition)              ✅ (ADR-010)
+         JSON/CSV export + multi-track batch CLI   ✅
+         MP4 wireless-mic channel sync             ✅
+Phase 8  Large-scale real-world benchmark
+Phase 9  Reaper RPP export + TimeMap composition
 Phase 10 GUI
 ```
 
 ## License
 
-MIT（见 `LICENSE`）。
+MIT — see [`LICENSE`](LICENSE). Third-party libraries keep their own licenses
+(numpy/scipy BSD; SoXR and libsndfile are LGPL, dynamically linked, notices
+preserved).
